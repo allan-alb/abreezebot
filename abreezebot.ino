@@ -24,12 +24,19 @@ float R1 = 10000;
 float logR2, R2, TemperatureValue;
 const float c1 = 1.009249522e-03, c2 = 2.378405444e-04, c3 = 2.019202697e-07;
 
+void printTemperatureValue(float value) {
+  Serial.print("Temperature: ");
+  Serial.print(value);
+  Serial.println(" C");
+}
+
 float getThermistorValue() {
   T0 = analogRead(THERMISTOR_PIN);
   R2 = R1 * (1023.0 / (float)T0 - 1.0);
   logR2 = log(R2);
   TemperatureValue = (1.0 / (c1 + c2*logR2 + c3*logR2*logR2*logR2));
   TemperatureValue = TemperatureValue - 273.15;
+  printTemperatureValue(TemperatureValue);
 
   return TemperatureValue;
 }
@@ -60,9 +67,7 @@ bool getAutoModeOnOffRelayStatus() {
   const bool relayCurrentlyActive = digitalRead(RELAY_PIN) == RELAY_ON_LEVEL;
   const bool shouldActivateRelay = getShouldActivateRelay(currentTemperatureValue, relayCurrentlyActive);
   Serial.println("");
-  Serial.print("Current temperature value: ");
-  Serial.print(currentTemperatureValue);
-  Serial.println(" C");
+  printTemperatureValue(currentTemperatureValue);
   Serial.print("Variation tolerance: ");
   Serial.println(temperatureVariationTolerance);
   Serial.print("Setting enabled status: ");
