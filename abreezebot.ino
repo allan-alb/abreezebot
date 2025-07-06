@@ -9,7 +9,7 @@ volatile bool irDataReceived = false;
 
 // Pin configs
 #define RELAY_PIN 7
-#define LED_PIN 6
+#define LED_PIN 4
 #define THERMISTOR_PIN A0
 #define RELAY_ON_LEVEL HIGH
 
