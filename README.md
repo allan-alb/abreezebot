@@ -31,7 +31,7 @@ ABreezeBot is a smart relay automation system with IR remote control and automat
 ## 📐 Wiring Diagram
 
 ```
-Thermistor ---- 10kΩ Resistor ---- A0
+Thermistor ---- A0 --- 10kΩ Resistor --- GND
               ↳ 5V
 
 Relay     ----- 5V
