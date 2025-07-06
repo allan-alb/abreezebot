@@ -42,7 +42,7 @@ IR Receiver --- 3.3V
               ↳ GND
               ↳ Pin 2
 
-LED        ---- 470Ω Resistor ---- Pin 8
+LED        ---- 470Ω Resistor ---- Pin 6
               ↳ GND
             
 ```
@@ -71,7 +71,7 @@ Adjust these settings in `ABreezeBot.ino` to fit your needs:
 // Pins
 #define IR_RECEIVER_PIN 2
 #define RELAY_PIN 7
-#define LED_PIN 8              // Auto Mode LED
+#define LED_PIN 6              // Auto Mode LED
 #define THERMISTOR_PIN A0
 
 // Relay logic level

@@ -7,8 +7,9 @@
 volatile bool irDataReceived = false;
 #include <IRremote.hpp>
 
+// Pin configs
 #define RELAY_PIN 7
-#define LED_PIN 8
+#define LED_PIN 6
 #define THERMISTOR_PIN A0
 #define RELAY_ON_LEVEL HIGH
 
