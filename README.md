@@ -125,5 +125,5 @@ MIT License – see LICENSE file.
 ## 💡 Future Enhancements
 
 - OLED display for temperature and mode status.
-- Configurable thresholds via remote.
+- ✅ Configurable thresholds via remote (implemented).
 - Add Wi-Fi or Bluetooth remote control.
