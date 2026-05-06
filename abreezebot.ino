@@ -25,6 +25,7 @@ char displayStrBuf[40];
 #define ENABLE_LED_FEEDBACK true
 #define DECODE_NEC
 volatile bool irDataReceived = false;
+volatile uint32_t lastIrCode = 0;
 #include <IRremote.hpp>
 
 // Pin configs
@@ -38,6 +39,9 @@ bool AUTO_MODE_ENABLED = false;
 float TEMPERATURE_THRESHOLD = 23;
 const float temperatureVariationTolerance = 0.5;
 #define AUTO_MODE_READ_INTERVAL 360000 // 360000 ms = 6 minutes
+unsigned long lastAutoModeCheckMs = 0;
+bool currentRelayActive = false;
+bool autoModeNeedsImmediateCheck = false;
 
 // Thermistor configs
 int T0;
@@ -99,9 +103,13 @@ float getThermistorValue() {
   logR2 = log(R2);
   TemperatureValue = (1.0 / (c1 + c2*logR2 + c3*logR2*logR2*logR2));
   TemperatureValue = TemperatureValue - 273.15;
-  printCurrentTemperatureValue(TemperatureValue);
 
   return TemperatureValue;
+}
+
+void setRelay(bool active) {
+  currentRelayActive = active;
+  digitalWrite(RELAY_PIN, active ? RELAY_ON_LEVEL : !RELAY_ON_LEVEL);
 }
 
 bool getShouldActivateRelay(float currentTemperature, bool relayCurrentlyActive) {
@@ -123,16 +131,19 @@ bool getShouldActivateRelay(float currentTemperature, bool relayCurrentlyActive)
 void increaseTemperatureThreshold() {
   TEMPERATURE_THRESHOLD += 1;
   printTemperatureThresholdValue();
+  if (AUTO_MODE_ENABLED) autoModeNeedsImmediateCheck = true;
 }
 
 void decreaseTemperatureThreshold() {
   TEMPERATURE_THRESHOLD -= 1;
   printTemperatureThresholdValue();
+  if (AUTO_MODE_ENABLED) autoModeNeedsImmediateCheck = true;
 }
 
 void changeAutoModeStatus(bool value) {
   AUTO_MODE_ENABLED = value;
   digitalWrite(LED_PIN, value);
+  if (value) autoModeNeedsImmediateCheck = true;
 
   // LCD display
   // lcd.clearDisplay();
@@ -147,67 +158,61 @@ void changeAutoModeStatus(bool value) {
   lcd.display();
 }
 
-bool getAutoModeOnOffRelayStatus() {
+void applyAutoModeRelay() {
   const float currentTemperatureValue = getThermistorValue();
-  const bool relayCurrentlyActive = digitalRead(RELAY_PIN) == RELAY_ON_LEVEL;
-  const bool shouldActivateRelay = getShouldActivateRelay(currentTemperatureValue, relayCurrentlyActive);
+  const bool shouldActivateRelay = getShouldActivateRelay(currentTemperatureValue, currentRelayActive);
   Serial.println("");
   printCurrentTemperatureValue(currentTemperatureValue);
   Serial.print("Variation tolerance: ");
   Serial.println(temperatureVariationTolerance);
   Serial.print("Setting enabled status: ");
   Serial.println(shouldActivateRelay);
-  if (shouldActivateRelay) {
-    return RELAY_ON_LEVEL;
-  } else {
-    return !RELAY_ON_LEVEL;
+  setRelay(shouldActivateRelay);
+}
+
+void handleIrCode(uint32_t code) {
+  if (code == 0xBA45FF00) {
+    // Button 1
+    setRelay(true);
+    changeAutoModeStatus(false);
+  } else if (code == 0xB946FF00) {
+    // Button 2
+    setRelay(false);
+    changeAutoModeStatus(false);
+  } else if (code == 0xB847FF00) {
+    // Button 3
+    changeAutoModeStatus(!AUTO_MODE_ENABLED);
+  } else if (code == 0xBB44FF00) {
+    // Button 4
+    digitalWrite(LCD_BACKLIGHT, !digitalRead(LCD_BACKLIGHT));
+  } else if (code == 0xE718FF00) {
+    // Button arrow up
+    increaseTemperatureThreshold();
+  } else if (code == 0xAD52FF00) {
+    // Button arrow down
+    decreaseTemperatureThreshold();
   }
 }
 
 void ReceiveCallbackHandler() {
   IrReceiver.decode();
-
-  if (IrReceiver.decodedIRData.decodedRawData == 0xBA45FF00) {
-    // Button 1
-    digitalWrite(RELAY_PIN, RELAY_ON_LEVEL);
-    changeAutoModeStatus(false);
-  } else if (IrReceiver.decodedIRData.decodedRawData == 0xB946FF00) {
-    // Button 2
-    digitalWrite(RELAY_PIN, !RELAY_ON_LEVEL);
-    changeAutoModeStatus(false);
-  } else if (IrReceiver.decodedIRData.decodedRawData == 0xB847FF00) {
-    // Button 3
-    changeAutoModeStatus(!AUTO_MODE_ENABLED);
-  } else if (IrReceiver.decodedIRData.decodedRawData == 0xBB44FF00) {
-    // Button 4
-    digitalWrite(LCD_BACKLIGHT, !digitalRead(LCD_BACKLIGHT));
-  } else if (IrReceiver.decodedIRData.decodedRawData == 0xE718FF00) {
-    // Button arrow up
-    increaseTemperatureThreshold();
-  } else if (IrReceiver.decodedIRData.decodedRawData == 0xAD52FF00) {
-    // Button arrow down
-    decreaseTemperatureThreshold();
-  }
-
-  // Set data received flag true
+  lastIrCode = IrReceiver.decodedIRData.decodedRawData;
   irDataReceived = true;
- 
-  // Resume receiving
   IrReceiver.resume();
 }
 
 void setup() {
+  Serial.begin(9600);
   Serial.println("Initializing...");
 
   // Relay config
   pinMode(RELAY_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, !RELAY_ON_LEVEL);
+  setRelay(false);
 
   // Led config
   pinMode(LED_PIN, OUTPUT);
 
   // IR config
-  Serial.begin(9600);
   IrReceiver.begin(IR_RECEIVER_PIN, ENABLE_LED_FEEDBACK);
   IrReceiver.registerReceiveCompleteCallback(ReceiveCallbackHandler);
 
@@ -227,12 +232,22 @@ void setup() {
 
 void loop() {
   if (irDataReceived) {
+    uint32_t code;
+    noInterrupts();
+    code = lastIrCode;
     irDataReceived = false;
+    interrupts();
+    handleIrCode(code);
   }
 
-  if (AUTO_MODE_ENABLED) {
-    digitalWrite(RELAY_PIN, getAutoModeOnOffRelayStatus());
+  if (!AUTO_MODE_ENABLED) return;
 
-    delay(AUTO_MODE_READ_INTERVAL);
+  const unsigned long now = millis();
+  const bool intervalElapsed = (now - lastAutoModeCheckMs) >= AUTO_MODE_READ_INTERVAL;
+
+  if (autoModeNeedsImmediateCheck || intervalElapsed) {
+    applyAutoModeRelay();
+    lastAutoModeCheckMs = now;
+    autoModeNeedsImmediateCheck = false;
   }
 }
