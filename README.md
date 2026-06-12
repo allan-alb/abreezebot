@@ -79,9 +79,9 @@ Adjust these settings in `ABreezeBot.ino` to fit your needs:
 
 // Auto Mode
 bool AUTO_MODE_ENABLED = false;           // Default state of Auto Mode
-const float TEMPERATURE_THRESHOLD = 19.0; // °C
+float TEMPERATURE_THRESHOLD = 23.0;       // °C (adjustable 0–50 with the remote arrows)
 const float temperatureVariationTolerance = 0.5; // °C hysteresis
-#define AUTO_MODE_READ_INTERVAL 360000    // 6 minutes in ms
+#define AUTO_MODE_READ_INTERVAL 360000UL  // 6 minutes in ms
 ```
 
 ---
@@ -94,11 +94,13 @@ const float temperatureVariationTolerance = 0.5; // °C hysteresis
 | Enable/Disable Auto Mode| (configure in code)         |
 
 When Auto Mode is enabled:  
-- The LED (Pin 8) turns ON as an indicator.  
-- The system checks temperature every 6 minutes.  
-- Relay activates if:  
-  - Temp ≤ threshold - tolerance → Relay ON  
-  - Temp ≥ threshold + tolerance → Relay OFF
+- The LED (Pin 4) turns ON as an indicator.  
+- The system checks temperature every 6 minutes (and immediately when Auto Mode is enabled or the threshold changes).  
+- Relay switching (cooling behavior, e.g. a fan — between the two limits the relay holds its current state):  
+  - Temp ≥ threshold + tolerance → Relay ON  
+  - Temp ≤ threshold - tolerance → Relay OFF  
+- For a heating device, swap the two return values in `getShouldActivateRelay()`.  
+- If the thermistor reads as disconnected/shorted, the relay is switched OFF as a fail-safe and the display shows "Sensor fault!".
 
 ---
 

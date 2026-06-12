@@ -13,7 +13,7 @@
 #include "ST7567_FB.h"
 #include <SPI.h>
 ST7567_FB lcd(LCD_DC, LCD_RST, LCD_CS);
-char displayStrBuf[40];
+char displayStrBuf[32];
 
 // from PropFonts library
 #include "c64enh_font.h"
@@ -22,8 +22,9 @@ char displayStrBuf[40];
 
 // IR constants and imports
 #define IR_RECEIVER_PIN 2
-#define ENABLE_LED_FEEDBACK true
 #define DECODE_NEC
+// NEC frames need only 68 raw buffer entries; the library default (up to 200) wastes RAM
+#define RAW_BUFFER_LENGTH 68
 volatile bool irDataReceived = false;
 volatile uint32_t lastIrCode = 0;
 #include <IRremote.hpp>
@@ -37,16 +38,16 @@ volatile uint32_t lastIrCode = 0;
 // Auto mode
 bool AUTO_MODE_ENABLED = false;
 float TEMPERATURE_THRESHOLD = 23;
+const float TEMPERATURE_THRESHOLD_MIN = 0;
+const float TEMPERATURE_THRESHOLD_MAX = 50;
 const float temperatureVariationTolerance = 0.5;
-#define AUTO_MODE_READ_INTERVAL 360000 // 360000 ms = 6 minutes
+#define AUTO_MODE_READ_INTERVAL 360000UL // 6 minutes
 unsigned long lastAutoModeCheckMs = 0;
 bool currentRelayActive = false;
 bool autoModeNeedsImmediateCheck = false;
 
 // Thermistor configs
-int T0;
-float R1 = 10000;
-float logR2, R2, TemperatureValue;
+const float R1 = 10000;
 const float c1 = 1.009249522e-03, c2 = 2.378405444e-04, c3 = 2.019202697e-07;
 
 void clearDisplayUpperSection() {
@@ -62,49 +63,52 @@ void clearDisplayLowerSection() {
 }
 
 void printCurrentTemperatureValue(float value) {
-  char tempStrValue[6];
+  char tempStrValue[8]; // dtostrf width is a minimum: "-273.15" needs 8 bytes with NUL
 
   // Serial monitor
-  Serial.print("Current temperature: ");
+  Serial.print(F("Current temperature: "));
   Serial.print(value);
-  Serial.println(" C");
+  Serial.println(F(" C"));
 
   // LCD display
   // lcd.clearDisplay();
   clearDisplayMiddleSection();
   dtostrf(value, 5, 2, tempStrValue);
-  snprintf(displayStrBuf, 40, "Current temperature: %s", tempStrValue);
+  snprintf_P(displayStrBuf, sizeof(displayStrBuf), PSTR("Current temperature: %s"), tempStrValue);
   lcd.setFont(Small4x7PL);
   lcd.printStr(ALIGN_CENTER, DISPLAY_MIDDLE_SECTION, displayStrBuf);
   lcd.display();
 }
 
 void printTemperatureThresholdValue() {
-  char tempStrValue[6];
+  char tempStrValue[8];
 
   // Serial monitor
-  Serial.print("Temperature Threshold: ");
+  Serial.print(F("Temperature Threshold: "));
   Serial.print(TEMPERATURE_THRESHOLD);
-  Serial.println(" C");
+  Serial.println(F(" C"));
 
   // LCD display
   // lcd.clearDisplay();
   clearDisplayUpperSection();
   dtostrf(TEMPERATURE_THRESHOLD, 5, 2, tempStrValue);
-  snprintf(displayStrBuf, 40, "Threshold temperature: %s", tempStrValue);
+  snprintf_P(displayStrBuf, sizeof(displayStrBuf), PSTR("Threshold temperature: %s"), tempStrValue);
   lcd.setFont(Small4x7PL);
   lcd.printStr(ALIGN_CENTER, DISPLAY_UPPER_SECTION, displayStrBuf);
   lcd.display();
 }
 
 float getThermistorValue() {
-  T0 = analogRead(THERMISTOR_PIN);
-  R2 = R1 * (1023.0 / (float)T0 - 1.0);
-  logR2 = log(R2);
-  TemperatureValue = (1.0 / (c1 + c2*logR2 + c3*logR2*logR2*logR2));
-  TemperatureValue = TemperatureValue - 273.15;
+  const int adcValue = analogRead(THERMISTOR_PIN);
 
-  return TemperatureValue;
+  // ADC pegged at a rail means the thermistor is disconnected or shorted
+  if (adcValue <= 0 || adcValue >= 1023) {
+    return NAN;
+  }
+
+  const float R2 = R1 * (1023.0 / (float)adcValue - 1.0);
+  const float logR2 = log(R2);
+  return (1.0 / (c1 + c2*logR2 + c3*logR2*logR2*logR2)) - 273.15;
 }
 
 void setRelay(bool active) {
@@ -112,30 +116,29 @@ void setRelay(bool active) {
   digitalWrite(RELAY_PIN, active ? RELAY_ON_LEVEL : !RELAY_ON_LEVEL);
 }
 
+// Hysteresis for a cooling device (fan): ON when temp >= threshold + tolerance,
+// OFF when temp <= threshold - tolerance, hold current state in between.
+// (For a heating device swap the two return values.)
 bool getShouldActivateRelay(float currentTemperature, bool relayCurrentlyActive) {
-  if (relayCurrentlyActive) {
-    if (currentTemperature < TEMPERATURE_THRESHOLD - temperatureVariationTolerance) {
-      return false;
-    }
+  if (currentTemperature >= TEMPERATURE_THRESHOLD + temperatureVariationTolerance) {
     return true;
   }
 
-  // relay currently inactive
-  if (currentTemperature > TEMPERATURE_THRESHOLD + temperatureVariationTolerance) {
-    return true;
+  if (currentTemperature <= TEMPERATURE_THRESHOLD - temperatureVariationTolerance) {
+    return false;
   }
 
-  return false;
+  return relayCurrentlyActive;
 }
 
 void increaseTemperatureThreshold() {
-  TEMPERATURE_THRESHOLD += 1;
+  if (TEMPERATURE_THRESHOLD < TEMPERATURE_THRESHOLD_MAX) TEMPERATURE_THRESHOLD += 1;
   printTemperatureThresholdValue();
   if (AUTO_MODE_ENABLED) autoModeNeedsImmediateCheck = true;
 }
 
 void decreaseTemperatureThreshold() {
-  TEMPERATURE_THRESHOLD -= 1;
+  if (TEMPERATURE_THRESHOLD > TEMPERATURE_THRESHOLD_MIN) TEMPERATURE_THRESHOLD -= 1;
   printTemperatureThresholdValue();
   if (AUTO_MODE_ENABLED) autoModeNeedsImmediateCheck = true;
 }
@@ -149,9 +152,9 @@ void changeAutoModeStatus(bool value) {
   // lcd.clearDisplay();
   clearDisplayLowerSection();
   if (AUTO_MODE_ENABLED) {
-    snprintf(displayStrBuf, 40, "Auto Mode: Enabled");
+    strcpy_P(displayStrBuf, PSTR("Auto Mode: Enabled"));
   } else {
-    snprintf(displayStrBuf, 40, "Auto Mode: Disabled");
+    strcpy_P(displayStrBuf, PSTR("Auto Mode: Disabled"));
   }
   lcd.setFont(Small4x7PL);
   lcd.printStr(ALIGN_CENTER, DISPLAY_LOWER_SECTION, displayStrBuf);
@@ -160,12 +163,25 @@ void changeAutoModeStatus(bool value) {
 
 void applyAutoModeRelay() {
   const float currentTemperatureValue = getThermistorValue();
+
+  if (isnan(currentTemperatureValue)) {
+    // Fail safe: never leave the relay on while the sensor is unreadable
+    setRelay(false);
+    Serial.println(F("Thermistor fault! Relay off"));
+    clearDisplayMiddleSection();
+    strcpy_P(displayStrBuf, PSTR("Sensor fault!"));
+    lcd.setFont(Small4x7PL);
+    lcd.printStr(ALIGN_CENTER, DISPLAY_MIDDLE_SECTION, displayStrBuf);
+    lcd.display();
+    return;
+  }
+
   const bool shouldActivateRelay = getShouldActivateRelay(currentTemperatureValue, currentRelayActive);
-  Serial.println("");
+  Serial.println();
   printCurrentTemperatureValue(currentTemperatureValue);
-  Serial.print("Variation tolerance: ");
+  Serial.print(F("Variation tolerance: "));
   Serial.println(temperatureVariationTolerance);
-  Serial.print("Setting enabled status: ");
+  Serial.print(F("Setting enabled status: "));
   Serial.println(shouldActivateRelay);
   setRelay(shouldActivateRelay);
 }
@@ -195,15 +211,18 @@ void handleIrCode(uint32_t code) {
 }
 
 void ReceiveCallbackHandler() {
-  IrReceiver.decode();
-  lastIrCode = IrReceiver.decodedIRData.decodedRawData;
-  irDataReceived = true;
+  // Ignore failed decodes (noise) and NEC auto-repeat frames from held buttons,
+  // so one press always means one action (e.g. no rapid auto-mode toggling)
+  if (IrReceiver.decode() && !(IrReceiver.decodedIRData.flags & IRDATA_FLAGS_IS_REPEAT)) {
+    lastIrCode = IrReceiver.decodedIRData.decodedRawData;
+    irDataReceived = true;
+  }
   IrReceiver.resume();
 }
 
 void setup() {
   Serial.begin(9600);
-  Serial.println("Initializing...");
+  Serial.println(F("Initializing..."));
 
   // Relay config
   pinMode(RELAY_PIN, OUTPUT);
@@ -213,7 +232,9 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
 
   // IR config
-  IrReceiver.begin(IR_RECEIVER_PIN, ENABLE_LED_FEEDBACK);
+  // Feedback LED disabled: it defaults to pin 13, which is the SPI SCK line
+  // already owned by the LCD, so it never worked and only risks bus conflicts
+  IrReceiver.begin(IR_RECEIVER_PIN, DISABLE_LED_FEEDBACK);
   IrReceiver.registerReceiveCompleteCallback(ReceiveCallbackHandler);
 
   // Display config
@@ -222,12 +243,13 @@ void setup() {
   lcd.init();
   lcd.cls();
   lcd.setFont(c64enh);
-  lcd.printStr(ALIGN_CENTER, 28, "Device ready");
+  strcpy_P(displayStrBuf, PSTR("Device ready"));
+  lcd.printStr(ALIGN_CENTER, 28, displayStrBuf);
   // lcd.drawRect(0,0,128,64,1);
   // lcd.drawRect(18,20,127-18*2,63-20*2,1);
   lcd.display();
 
-  Serial.println("Device ready");
+  Serial.println(F("Device ready"));
 }
 
 void loop() {
