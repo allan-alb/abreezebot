@@ -23,8 +23,10 @@ char displayStrBuf[32];
 // IR constants and imports
 #define IR_RECEIVER_PIN 2
 #define DECODE_NEC
-// NEC frames need only 68 raw buffer entries; the library default (up to 200) wastes RAM
-#define RAW_BUFFER_LENGTH 68
+// A full NEC frame fills 68 raw entries; the library flags an overflow when
+// rawlen >= RAW_BUFFER_LENGTH, so the buffer must be comfortably larger than 68.
+// 100 keeps headroom for trailing edges/noise and still trims the default.
+#define RAW_BUFFER_LENGTH 100
 volatile bool irDataReceived = false;
 volatile uint32_t lastIrCode = 0;
 #include <IRremote.hpp>
@@ -211,11 +213,15 @@ void handleIrCode(uint32_t code) {
 }
 
 void ReceiveCallbackHandler() {
-  // Ignore failed decodes (noise) and NEC auto-repeat frames from held buttons,
-  // so one press always means one action (e.g. no rapid auto-mode toggling)
-  if (IrReceiver.decode() && !(IrReceiver.decodedIRData.flags & IRDATA_FLAGS_IS_REPEAT)) {
-    lastIrCode = IrReceiver.decodedIRData.decodedRawData;
-    irDataReceived = true;
+  // Only act on a clean NEC frame: skip held-button auto-repeats (IS_REPEAT) and
+  // never forward overflow/noise (WAS_OVERFLOW or non-NEC) as a bogus code
+  if (IrReceiver.decode()) {
+    const uint8_t flags = IrReceiver.decodedIRData.flags;
+    if (IrReceiver.decodedIRData.protocol == NEC &&
+        !(flags & (IRDATA_FLAGS_IS_REPEAT | IRDATA_FLAGS_WAS_OVERFLOW))) {
+      lastIrCode = IrReceiver.decodedIRData.decodedRawData;
+      irDataReceived = true;
+    }
   }
   IrReceiver.resume();
 }
